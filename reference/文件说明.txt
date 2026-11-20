@@ -1,0 +1,23 @@
+﻿DL/T 645 标准文件下载记录
+下载时间: 2026-11-20
+
+文件名: DL-T 645-1997 多功能电能表通信规约(文字版).pdf
+大小  : 287435 字节
+SHA256: 7F890192607FC59D564EB678D79AB81B131F4F7BE32CDBF075E461B0E47C4D31
+
+文件名: DL-T 645-2007 多功能电能表通信协议(扫描原版).pdf
+大小  : 16523937 字节
+SHA256: 8FB0548D0E0375E30A70E87A34AB1620DAA1C2654EEC1FE7BF4AC871577EF690
+
+文件名: DL-T 645-2007 多功能电能表通信协议(文字版).pdf
+大小  : 1408775 字节
+SHA256: 658E51D1DA5E6538AA3B57F250F7614E1A26DA05173217D3DC515FB210D3685D
+
+来源:
+1) DL/T 645-1997 文字版: https://d1.amobbs.com/bbs_upload782111/files_1/armok0126802.pdf
+   (与 github.com/AuroraRAS/electricMeterReader 中的 DLT645-1997.pdf 完全相同)
+2) DL/T 645-2007 扫描原版: https://raw.githubusercontent.com/AuroraRAS/electricMeterReader/master/DLT645-2007.pdf
+   (经 ghproxy.net 镜像下载)
+3) DL/T 645-2007 文字版: https://www.toky.com.cn/download_detail/67.html 页面附件
+
+页数: 1997版 36页(含封面, 可复制文字); 2007扫描版 89页(纯图片, 88页正文); 2007文字版 115页(可搜索/复制)
