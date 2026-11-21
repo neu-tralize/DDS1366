@@ -1,2 +1,9 @@
 # 本地记忆文件，不提交
 MEMORY.md
+
+# 工具本地配置与运行产物
+tools/.env
+tools/meter_sim.json
+tools/captures/
+__pycache__/
+*.pyc
