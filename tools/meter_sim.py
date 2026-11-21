@@ -199,6 +199,7 @@ class SimSession:
         ui.save_env(self.cfg)
         state = self.state
         state.pending_baud = None
+        state.pending_close_at = None
         simulator = m.MeterSimulator(state, log=print)
         print(f"\n模拟开始: {state.address}  {port} {baud} 8{parity}1  "
               f"电能 {state.total_cents() / 100:.2f} kWh  "

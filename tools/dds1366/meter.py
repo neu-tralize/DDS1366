@@ -13,6 +13,8 @@ DEFAULT_PARAM = bytes.fromhex(
     "03 63 AA 00 00 50 00 00 00 08 00 00 0F 00 64 00 32 00 "
     "D0 07 10 27 30 75 83 03 60 00 00 00")
 
+CLOSE_TRANSITION_S = 1.0   # 实测：单播合闸后 08 00 过渡态约 1s 后回 00 00
+
 
 def _default_rates():
     return [0, 0, 0, 0]
@@ -37,6 +39,7 @@ class MeterState:
     broadcast_clear_energy: bool = True
     pending_baud: int | None = None
     pending_baud_at: float = 0.0
+    pending_close_at: float | None = None   # 08 00 合闸清除过渡的完成时刻
 
     @property
     def aw(self) -> bytes:
@@ -253,8 +256,10 @@ class MeterSimulator:
             self.log("单播 1A 跳闸 → 08 02")
             return [self._respond(0x9C, b"")]
         if n1 == 0x1C:
-            self.state.status = b"\x00\x00"
-            self.log("单播 1C 合闸 → 00 00")
+            # 实测：合闸接受后先进入 08 00 过渡态，约 1s 后回 00 00
+            self.state.status = b"\x08\x00"
+            self.state.pending_close_at = time.monotonic() + CLOSE_TRANSITION_S
+            self.log(f"单播 1C 合闸 → 08 00，{CLOSE_TRANSITION_S:g}s 后回 00 00")
             if n2 == 0xAA:
                 return []
             return [self._respond(0x9C, b"")]
@@ -314,6 +319,8 @@ class MeterSimulator:
         if cmd == 0x11:
             return self._read(raw)
         if cmd == 0x12:
+            if not raw:
+                return []    # 实测：空数据域 12H 真实表静默忽略
             return [self._error(0xD2, 0x01)]
         if cmd == 0x13:
             return [self._error(0xD3, 0x02)]
@@ -346,6 +353,17 @@ class MeterSimulator:
             self.log(f"速率切换为 {state.pending_baud}bps")
             state.pending_baud = None
 
+    def check_pending_close(self):
+        """08 00 合闸清除过渡到期后回 00 00；期间状态被改写则不再覆盖。"""
+        state = self.state
+        if state.pending_close_at is None:
+            return
+        if time.monotonic() >= state.pending_close_at:
+            state.pending_close_at = None
+            if state.status == b"\x08\x00":
+                state.status = b"\x00\x00"
+                self.log("合闸清除完成 → 00 00")
+
 
 def simulate(link: Link, simulator: MeterSimulator, log=print,
              stop_after: float | None = None):
@@ -356,6 +374,7 @@ def simulate(link: Link, simulator: MeterSimulator, log=print,
             return
         chunk = link.read(0.05)
         simulator.check_pending_baud(link)
+        simulator.check_pending_close()
         if not chunk:
             continue
         for frame in stream.feed(chunk):
@@ -458,6 +477,11 @@ def selftest():
 
     req = p.build_frame(p.wire_addr_of(state.address), 0x12)
     valid, _ = p.find_frames(req)
+    assert sim.handle(valid[0]) == []    # 实测：空数据域 12H 静默忽略
+
+    req = p.build_frame(p.wire_addr_of(state.address), 0x12,
+                        p.add33(p.di_le_bytes(0xF9010100)))
+    valid, _ = p.find_frames(req)
     frames = _unwrap(sim.handle(valid[0]))
     assert frames[0].ctrl == 0xD2 and p.err_code(frames[0]) == 0x01
 
@@ -484,7 +508,10 @@ def selftest():
     req = p.build_control(p.wire_addr_of(state.address), 0, "000000", 0x1C)
     valid, _ = p.find_frames(req)
     frames = _unwrap(sim.handle(valid[0]))
-    assert frames[0].ctrl == 0x9C and state.status == b"\x00\x00"
+    assert frames[0].ctrl == 0x9C and state.status == b"\x08\x00"
+    state.pending_close_at = time.monotonic() - 0.1   # 快进过渡期
+    sim.check_pending_close()
+    assert state.status == b"\x00\x00" and state.pending_close_at is None
 
     req = p.build_control(p.wire_addr_of(state.address), 0, "000000", 0x1A)
     valid, _ = p.find_frames(req)
