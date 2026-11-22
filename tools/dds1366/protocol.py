@@ -224,7 +224,7 @@ DI_TABLE = (
     DiInfo(0x04000503, "运行状态字3", 2, ""),
     DiInfo(0xF9010100, "厂家组合读: 电能+继电器状态", 6, "kWh"),
     DiInfo(0xF9030100, "厂家参数块(30B)", 30, "", writable=True,
-           note="byte[2] 为保电标志"),
+           note="byte[2] 为广播分组标志"),
     DiInfo(0xF9030200, "厂家保留块(10B)", 10, ""),
     DiInfo(0xF9AAAA01, "厂家数值参数(4B)", 4, "", writable=True,
            note="物理意义未确定"),
@@ -270,15 +270,23 @@ def bcd_bytes_le(value: int, width: int) -> bytes:
     return bytes.fromhex(text)[::-1]
 
 
-_KEEP_FLAG_NAMES = {
+_GROUP_FLAG_NAMES = {
     0x00: "分组00(广播N2=00才执行,未实测勿试)",
     0xAA: "分组AA(广播N2=AA才执行)",
     0xBB: "分组BB(广播N2=BB才执行,11-22实测)",
 }
 
 
-def keep_flag_desc(value: int) -> str:
-    return _KEEP_FLAG_NAMES.get(value, f"未知值 {value:02X}")
+def group_flag_desc(value: int) -> str:
+    return _GROUP_FLAG_NAMES.get(value, f"分组{value:02X}(未实测)")
+
+
+def parse_group_flag(text: str) -> int | None:
+    """两位 HEX 组名（如 00/AA/BB）→ 0~255；不合法返回 None。"""
+    text = (text or "").strip().upper()
+    if len(text) != 2 or any(ch not in "0123456789ABCDEF" for ch in text):
+        return None
+    return int(text, 16)
 
 
 _RELAY_STATUS = {
@@ -322,7 +330,7 @@ def decode_value(di: int, payload: bytes) -> str:
                 f"{relay_status_desc(payload[4:6])}")
 
     if di == 0xF9030100 and n >= 30:
-        return (f"byte[2]={payload[2]:02X} ({keep_flag_desc(payload[2])}) | "
+        return (f"byte[2]={payload[2]:02X} ({group_flag_desc(payload[2])}) | "
                 f"块={payload.hex(' ').upper()}")
 
     if di == 0xF9030200:
@@ -494,7 +502,10 @@ def selftest():
     assert decode_value(0x02060000, bytes.fromhex("9308")) == "0.893"
     assert bcd_bytes_le(533, 4) == bytes.fromhex("33050000")
     assert "定时拉闸" in relay_status_desc(b"\x08\x06")
-    assert "分组BB" in keep_flag_desc(0xBB)
+    assert "分组BB" in group_flag_desc(0xBB)
+    assert parse_group_flag("aa") == 0xAA and parse_group_flag("0A") == 0x0A
+    assert parse_group_flag("A") is None and parse_group_flag("GG") is None \
+        and parse_group_flag("") is None
 
     bad = bytearray(build_read(aw, 0))
     bad[-2] ^= 1

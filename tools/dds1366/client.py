@@ -116,21 +116,20 @@ class Client:
             result.detail = "写入接受 (94H)"
         return result
 
-    def set_keep_flag(self, flag: int, pa: int = 0x00,
-                      pwd: str = "000000"):
-        if flag not in (0x00, 0xAA):
-            raise ValueError("保电标志只允许 00H 或 AAH")
+    def set_group_flag(self, flag: int, pa: int = 0x00,
+                       pwd: str = "000000"):
+        """读改写 F9030100 byte[2] 广播分组标志并回读校验。"""
+        if not 0x00 <= flag <= 0xFF:
+            raise ValueError("广播分组标志应为两位 HEX（00~FF）")
         read1 = self.read_parameter()
         if read1.status not in OK_STATUS or read1.payload is None:
             return False, f"读取 F9030100 失败: {read1.detail}"
         current = read1.payload[2]
-        if current not in (0x00, 0xAA, 0xBB):
-            return False, f"当前 byte[2]={current:02X} 不在 00/AA/BB，中止写入"
         if current == flag:
             return True, f"当前已是 {flag:02X}H，无需写入"
         content = read1.payload[:2] + bytes([flag]) + read1.payload[3:]
         write_result = self.write(0xF9030100, content, pa, pwd,
-                                  label=f"写保电标志 byte[2]={flag:02X}")
+                                  label=f"写广播分组标志 byte[2]={flag:02X}")
         if write_result.status not in OK_STATUS:
             return False, f"写入未接受: {write_result.detail}"
         read2 = self.read_parameter()
@@ -263,7 +262,7 @@ def selftest():
         _read_response(aw, 0xF9030100, changed),
     ])
     client = Client(DirectScheduler(link, aw, response_timeout=0.1), "123456789012")
-    ok, detail = client.set_keep_flag(0x00)
+    ok, detail = client.set_group_flag(0x00)
     assert ok, detail
     assert len(link.sent) == 3
 

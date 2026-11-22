@@ -209,15 +209,18 @@ def cmd_read_address(args, cfg):
 
 
 def cmd_write_param(args, cfg):
-    flag = int(args.flag, 16)
+    flag = p.parse_group_flag(args.flag)
+    if flag is None:
+        print("组名应为两位 HEX，如 00/AA/BB。")
+        return 2
     pa = args.pa
     pwd = args.password or CREDENTIALS.get(pa)
     if pwd is None:
         print(f"PA={pa:02X} 无已知默认密码，请用 --password 指定。")
         return 2
-    if not allowed(args, "修改保电标志", [
-        f"byte[2] → {flag:02X}H ({p.keep_flag_desc(flag)})",
-        "会改变本表对广播拉闸的响应。",
+    if not allowed(args, "修改广播分组标志", [
+        f"byte[2] → {flag:02X}H ({p.group_flag_desc(flag)})",
+        "广播分组标志决定本表响应哪个组名的广播拉/合闸。",
     ]):
         return 1
     try:
@@ -228,7 +231,7 @@ def cmd_write_param(args, cfg):
         print(f"连接失败: {exc}")
         return 1
     try:
-        ok, detail = client.set_keep_flag(flag, pa, pwd)
+        ok, detail = client.set_group_flag(flag, pa, pwd)
         print(("成功: " if ok else "失败: ") + detail)
         return 0 if ok else 1
     finally:
@@ -378,10 +381,14 @@ def cmd_set_address(args, cfg):
 
 def cmd_broadcast(args, cfg):
     trip = args.action == "trip"
+    group = p.parse_group_flag(args.group or ui.env_group(cfg))
+    if group is None:
+        print("组名应为两位 HEX，如 AA/BB。")
+        return 2
     if not allowed(args, "广播" + ("拉闸" if trip else "合闸"), [
-        "广播地址 999999999999，总线上所有表都会执行。",
-        "拉闸只对 byte[2]=AAH 的表生效。",
-        "合闸只把 08 06 定时拉闸恢复为 00 00。",
+        "广播地址 999999999999，总线上所有表都会接收。",
+        f"拉闸只对广播分组标志 byte[2]={group:02X}H 的表生效。",
+        "合闸只把对应分组的 08 06 定时拉闸恢复为 00 00。",
     ]):
         return 1
     try:
@@ -393,7 +400,7 @@ def cmd_broadcast(args, cfg):
         return 1
     try:
         results = client.broadcast_control(
-            0x1A if trip else 0x1C, 0xAA, args.times, args.gap)
+            0x1A if trip else 0x1C, group, args.times, args.gap)
         for result in results:
             ui.show_result(result)
         if results and all(result.status == "ok" for result in results):
@@ -492,9 +499,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(item)
     item.set_defaults(func=cmd_read_address)
 
-    item = sub.add_parser("write-param", help="读改写 F9030100 保电标志")
+    item = sub.add_parser("write-param", help="读改写 F9030100 广播分组标志")
     add_common(item)
-    item.add_argument("--flag", required=True, choices=("00", "AA"))
+    item.add_argument("--flag", required=True,
+                      help="目标组名，两位 HEX（如 00/AA/BB）")
     item.add_argument("--pa", type=hex_int, default=0)
     item.add_argument("--password", help="6 位 HEX 密码")
     item.add_argument("--yes", action="store_true")
@@ -534,9 +542,11 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--yes", action="store_true")
     item.set_defaults(func=cmd_set_address)
 
-    item = sub.add_parser("broadcast", help="广播 1AH/1CH")
+    item = sub.add_parser("broadcast", help="广播 1AH/1CH（N2=目标分组）")
     add_common(item)
     item.add_argument("action", choices=("trip", "close"))
+    item.add_argument("--group",
+                      help="目标组名，两位 HEX（默认 .env BROADCAST_GROUP，缺省 AA）")
     item.add_argument("--times", type=int, default=2)
     item.add_argument("--gap", type=float, default=0.42)
     item.add_argument("--no-verify", action="store_true")

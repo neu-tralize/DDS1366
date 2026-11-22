@@ -54,9 +54,9 @@ def param_menu(state: m.MeterState):
     while True:
         block = state.param_block
         print(f"\nF9030100 ({len(block)}B): {block.hex(' ').upper()}")
-        print(f"byte[2]={block[2]:02X}H ({p.keep_flag_desc(block[2])})")
+        print(f"byte[2]={block[2]:02X}H ({p.group_flag_desc(block[2])})")
         choice = ui.menu("参数块", [
-            ("1", "设置保电标志 byte[2]"),
+            ("1", "设置广播分组标志 byte[2]"),
             ("2", "整块 30 字节写入 HEX"),
             ("3", "设置 F9AAAA01 数值"),
             ("4", "设置 F9030200 10 字节 HEX"),
@@ -65,10 +65,15 @@ def param_menu(state: m.MeterState):
         if choice == "0":
             return
         if choice == "1":
-            flag_text = ui.ask("标志 1=保电(00) 2=非保电(AA) 3=BB(行为同 00)", "1")
-            flag = {"1": 0x00, "2": 0xAA, "3": 0xBB}.get(flag_text, 0xAA)
-            state.param_block = block[:2] + bytes([flag]) + block[3:]
-            print(f"byte[2] 已改为 {flag:02X}H")
+            text = ui.ask("目标组名（两位 HEX，如 00/AA/BB；留空=不修改）", "")
+            flag = p.parse_group_flag(text)
+            if not text:
+                print("保持现状，不改动。")
+            elif flag is None:
+                print("组名应为两位 HEX，如 00/AA/BB。")
+            else:
+                state.param_block = block[:2] + bytes([flag]) + block[3:]
+                print(f"byte[2] 已改为 {flag:02X}H")
         elif choice == "2":
             raw = ui.ask_hex_bytes("30 字节 HEX", block.hex())
             if len(raw) == 30:
@@ -178,7 +183,7 @@ class SimSession:
         print(f"  地址 {state.address}  "
               f"电能 {state.total_cents() / 100:.2f} kWh  "
               f"继电器 {state.status.hex().upper()}  "
-              f"保电标志 {state.keep_flag:02X}H")
+              f"广播分组标志 {state.group_flag:02X}H")
         print(f"  串口 {cfg.get('PORT') or '(自动)'} "
               f"{ui.env_int(cfg, 'BAUD', 2400)} 8"
               f"{cfg.get('PARITY', 'E')}1  "
@@ -204,7 +209,7 @@ class SimSession:
         print(f"\n模拟开始: {state.address}  {port} {baud} 8{parity}1  "
               f"电能 {state.total_cents() / 100:.2f} kWh  "
               f"继电器 {state.status.hex().upper()}  "
-              f"保电标志 {state.keep_flag:02X}H")
+              f"广播分组标志 {state.group_flag:02X}H")
         print("Ctrl+C 停止并返回菜单。未实现指令一律静默。\n")
         try:
             m.simulate(link, simulator, log=print, stop_after=seconds)
@@ -245,7 +250,7 @@ def main() -> int:
                 ("1", "表地址"),
                 ("2", "电能与费率"),
                 ("3", "继电器状态"),
-                ("4", "参数块与保电标志"),
+                ("4", "参数块与广播分组标志"),
                 ("5", "测量值 / 运行状态"),
                 ("6", "串口设置"),
                 ("7", "模拟行为"),

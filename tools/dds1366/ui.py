@@ -12,9 +12,11 @@ ENV_PATH = BASE_DIR / ".env"
 _INPUT_CLOSED = False
 
 ENV_ORDER = (
-    "METER_ADDRESS", "PORT", "BAUD", "PARITY", "TX_KEY",
+    "METER_ADDRESS", "PORT", "BAUD", "PARITY", "TX_KEY", "BROADCAST_GROUP",
     "RETRIES", "RESPONSE_TIMEOUT", "COEXIST_PER_WINDOW", "COEXIST_TXN_WAIT",
 )
+
+DEFAULT_GROUP = "AA"
 
 
 def init_console():
@@ -223,6 +225,12 @@ def parity_prompt(current: str = "E") -> str:
 def tx_key_prompt(current: str = "rts") -> str:
     value = ask("RS485 方向脚 rts/dtr/none", current).lower()
     return value if value in ("rts", "dtr", "none") else current
+
+
+def env_group(cfg: dict) -> str:
+    """广播拉/合闸帧默认组名（两位 HEX）；未设置或非法时回落 AA。"""
+    value = p.parse_group_flag(cfg.get("BROADCAST_GROUP", ""))
+    return f"{value:02X}" if value is not None else DEFAULT_GROUP
 
 
 def env_int(cfg: dict, key: str, default: int) -> int:

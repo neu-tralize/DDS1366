@@ -46,7 +46,8 @@ class MeterState:
         return p.wire_addr_of(self.address)
 
     @property
-    def keep_flag(self) -> int:
+    def group_flag(self) -> int:
+        """广播分组标志：F9030100 byte[2]，广播拉/合闸按 N2 匹配。"""
         return self.param_block[2] if len(self.param_block) > 2 else 0xAA
 
     def total_cents(self) -> int:
@@ -219,7 +220,7 @@ class MeterSimulator:
             if len(content) != 30:
                 return [self._error(0xD4, 0x01)]
             self.state.param_block = content
-            self.log(f"参数块已写入，保电标志={content[2]:02X}")
+            self.log(f"参数块已写入，广播分组标志={content[2]:02X}")
             return [self._respond(0x94, b"")]
         if len(content) != 4:
             return [self._error(0xD4, 0x01)]
@@ -270,10 +271,10 @@ class MeterSimulator:
             return []
         n1, n2 = raw[8], raw[9]
         # V1.5 模型：N2 为目标分组选择器，N2 == F9030100[2] 才执行
-        if n1 == 0x1A and n2 == self.state.keep_flag:
+        if n1 == 0x1A and n2 == self.state.group_flag:
             self.state.status = b"\x08\x06"
             self.log("广播 1A 拉闸（N2==分组号）→ 08 06")
-        elif n1 == 0x1C and n2 == self.state.keep_flag \
+        elif n1 == 0x1C and n2 == self.state.group_flag \
                 and self.state.status == b"\x08\x06":
             self.state.status = b"\x00\x00"
             self.log("广播 1C 合闸（N2==分组号）→ 00 00")

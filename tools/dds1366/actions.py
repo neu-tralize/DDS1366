@@ -53,7 +53,8 @@ def read_menu(session):
 def write_menu(session):
     while True:
         choice = ui.menu("写参数", [
-            ("1", "保电标志（读 F9030100 → 改 byte[2] → 回读校验）"),
+            ("1", "广播分组标志（广播拉合闸行为设置，"
+                  "读 F9030100 → 改 byte[2] → 回读校验）"),
             ("2", "写 F9AAAA01 数值（物理意义未定）"),
             ("3", "自定义写（DI/PA/密码/内容）"),
             ("0", "返回"),
@@ -67,22 +68,22 @@ def write_menu(session):
                 ui.pause()
                 continue
             current = result.payload[2]
-            print(f"当前 byte[2]={current:02X}H ({p.keep_flag_desc(current)})")
-            text = ui.ask(
-                "目标标志 0=不改动退出 1=保电(00H) 2=非保电(AAH)", "0")
-            if text == "0":
+            print(f"当前 byte[2]={current:02X}H ({p.group_flag_desc(current)})")
+            text = ui.ask("目标组名（两位 HEX，如 00/AA/BB；留空=不修改）", "")
+            if not text:
                 print("保持现状，不改动。")
                 continue
-            if text not in ("1", "2"):
-                print("只能输入 0/1/2。")
+            flag = p.parse_group_flag(text)
+            if flag is None:
+                print("组名应为两位 HEX，如 00/AA/BB。")
                 continue
-            flag = 0x00 if text == "1" else 0xAA
-            if not session.gate("修改保电标志", [
-                f"目标 byte[2]={flag:02X}H ({p.keep_flag_desc(flag)})",
-                "会改变本表对广播拉闸的响应，写入后自动回读校验。",
+            if not session.gate("修改广播分组标志", [
+                f"目标 byte[2]={flag:02X}H ({p.group_flag_desc(flag)})",
+                "广播分组标志决定本表响应哪个组名的广播拉/合闸，"
+                "写入后自动回读校验。",
             ]):
                 continue
-            ok, detail = session.client.set_keep_flag(flag)
+            ok, detail = session.client.set_group_flag(flag)
             print(("成功: " if ok else "失败: ") + detail)
             ui.pause()
             continue
@@ -139,8 +140,8 @@ def relay_menu(session):
             ("1", "单播跳闸（1AH）"),
             ("2", "单播合闸（1CH）"),
             ("3", "跳闸 → 保持 → 自动恢复"),
-            ("4", "广播拉闸（99×6，1AH·AAH，连发 2 遍）"),
-            ("5", "广播合闸（99×6，1CH·AAH，连发 2 遍）"),
+            ("4", "广播拉闸（99×6，1AH，连发 2 遍）"),
+            ("5", "广播合闸（99×6，1CH，连发 2 遍）"),
             ("6", "读继电器状态（F9010100）"),
             ("0", "返回"),
         ])
@@ -177,17 +178,25 @@ def relay_menu(session):
             continue
         if choice in ("4", "5"):
             trip = choice == "4"
+            default_group = ui.env_group(session.cfg)
+            text = ui.ask(
+                f"目标组名（两位 HEX，如 AA/BB；回车=默认 {default_group}）",
+                default_group)
+            group = p.parse_group_flag(text)
+            if group is None:
+                print("组名应为两位 HEX，如 AA/BB。")
+                continue
             if not session.gate(
                     "广播" + ("拉闸" if trip else "合闸"), [
                         "广播地址 999999999999，总线上所有表都会接收。",
-                        "N2 为目标分组选择器：本工具发 N2=AAH，"
-                        "只作用于 byte[2]=AAH 的表。",
-                        "广播合闸只恢复 byte[2]=AAH 且状态字 08 06 的表。",
+                        f"N2 为目标分组选择器：本帧 N2={group:02X}H，"
+                        f"只作用于广播分组标志 byte[2]={group:02X}H 的表。",
+                        "广播合闸只恢复对应分组且状态字 08 06 的表。",
                         "禁止在运行总线上执行。",
                     ]):
                 continue
             results = session.client.broadcast_control(
-                0x1A if trip else 0x1C, 0xAA)
+                0x1A if trip else 0x1C, group)
             show_many(results)
             time.sleep(0.5)
             print("读目标表状态确认:")
