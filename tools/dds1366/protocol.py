@@ -271,9 +271,9 @@ def bcd_bytes_le(value: int, width: int) -> bytes:
 
 
 _KEEP_FLAG_NAMES = {
-    0x00: "保电(忽略广播拉闸)",
-    0xAA: "非保电(执行广播拉闸)",
-    0xBB: "保电(实测行为同 00)",
+    0x00: "分组00(广播N2=00才执行,未实测勿试)",
+    0xAA: "分组AA(广播N2=AA才执行)",
+    0xBB: "分组BB(广播N2=BB才执行,11-22实测)",
 }
 
 
@@ -494,7 +494,7 @@ def selftest():
     assert decode_value(0x02060000, bytes.fromhex("9308")) == "0.893"
     assert bcd_bytes_le(533, 4) == bytes.fromhex("33050000")
     assert "定时拉闸" in relay_status_desc(b"\x08\x06")
-    assert "保电" in keep_flag_desc(0xBB)
+    assert "分组BB" in keep_flag_desc(0xBB)
 
     bad = bytearray(build_read(aw, 0))
     bad[-2] ^= 1

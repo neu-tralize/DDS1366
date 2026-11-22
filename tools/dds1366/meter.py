@@ -269,12 +269,14 @@ class MeterSimulator:
         if len(raw) < 10:
             return []
         n1, n2 = raw[8], raw[9]
-        if n1 == 0x1A and n2 == 0xAA and self.state.keep_flag == 0xAA:
+        # V1.5 模型：N2 为目标分组选择器，N2 == F9030100[2] 才执行
+        if n1 == 0x1A and n2 == self.state.keep_flag:
             self.state.status = b"\x08\x06"
-            self.log("广播 1A 拉闸 → 08 06")
-        elif n1 == 0x1C and n2 == 0xAA and self.state.status == b"\x08\x06":
+            self.log("广播 1A 拉闸（N2==分组号）→ 08 06")
+        elif n1 == 0x1C and n2 == self.state.keep_flag \
+                and self.state.status == b"\x08\x06":
             self.state.status = b"\x00\x00"
-            self.log("广播 1C 合闸 → 00 00")
+            self.log("广播 1C 合闸（N2==分组号）→ 00 00")
         return []
 
     # ---------------------------------------------------------- 入口
