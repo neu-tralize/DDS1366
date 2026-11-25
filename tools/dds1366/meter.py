@@ -50,6 +50,11 @@ class MeterState:
         """广播分组标志：F9030100 byte[2]，广播拉/合闸按 N2 匹配。"""
         return self.param_block[2] if len(self.param_block) > 2 else 0xAA
 
+    @property
+    def current_ma(self) -> int:
+        """单相电流 0.001 A，由视在功率与电压导出：I = S / U。"""
+        return round(self.apparent_mva * 10000 / max(1, self.voltage_dv))
+
     def total_cents(self) -> int:
         return sum(self.rates)
 
@@ -160,10 +165,9 @@ class MeterSimulator:
             return [self._respond(0x91, raw + self._value_bytes(
                 self.state.voltage_dv, 2))]
         if di == 0x02020100:
-            # 功率线上格式为标准 XX.XXXX（0.0001 kW/字，实测与表显一致）；
-            # 状态字段单位 0.001 kW，编码时 ×10。
+            # 单相表：I = S / U，0.001 A/字（实测 U×I≈S）。
             return [self._respond(0x91, raw + self._value_bytes(
-                self.state.power_mw * 10, 3))]
+                self.state.current_ma, 3))]
         if di in (0x02030000, 0x02030100):
             return [self._respond(0x91, raw + self._value_bytes(
                 self.state.power_mw * 10, 3))]
@@ -442,11 +446,13 @@ def selftest():
     frames = _unwrap(sim.handle(valid[0]))
     assert p.decode_value(0x02010100, p.sub33(frames[0].data)[4:]) == "220.0 V"
 
+    state.apparent_mva = 81      # 0.081 kVA @ 220.0 V → 0.368 A
     req = p.build_read(p.wire_addr_of(state.address), 0x02020100)
     valid, _ = p.find_frames(req)
     frames = _unwrap(sim.handle(valid[0]))
-    assert "非电流" in p.decode_value(0x02020100,
-                                      p.sub33(frames[0].data)[4:])
+    assert p.decode_value(0x02020100,
+                          p.sub33(frames[0].data)[4:]) == "0.368 A"
+    state.apparent_mva = 0
 
     state.power_mw = 120    # 0.12 kW，缩放已与实表表显核对
     req = p.build_read(p.wire_addr_of(state.address), 0x02030000)

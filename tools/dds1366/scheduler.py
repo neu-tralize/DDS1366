@@ -235,6 +235,22 @@ class CoexistScheduler:
         results, _ = self.run(queue, rounds)
         return results
 
+    def consume_window(self, queue: RequestQueue, on_result=None):
+        """在当前/下一个天窗内尽量多发；发不完的请求留在 queue。
+
+        每窗次数由空窗跨度和 per_window 共同决定；on_result 逐条回调，
+        便于调用方在窗口结束前刷新已完成的项。
+        """
+        self._check_read_only(queue)
+        results = []
+        if not queue.items:
+            return results
+        window = self._wait_window(queue)
+        if window is None:
+            return results
+        self._run_window(window, queue, results, on_result)
+        return results
+
     def _check_read_only(self, queue: RequestQueue):
         for request in queue.snapshot():
             frame = request.frame
@@ -332,7 +348,8 @@ class CoexistScheduler:
         self._window_anchor = obs.last_master
         return Window(now, dead, span, n, w, budget)
 
-    def _run_window(self, window: Window, queue: RequestQueue, results):
+    def _run_window(self, window: Window, queue: RequestQueue, results,
+                    on_result=None):
         obs = self.observer
         self.stats["windows"] += 1
         self.log(f"── 天窗打开: 跨度 {window.span:.2f}s，"
@@ -398,7 +415,10 @@ class CoexistScheduler:
                 obs.own_end = time.monotonic()
 
                 if status in ("ok", "late", "err"):
-                    results.append(Result(request, status, frame, detail))
+                    result = Result(request, status, frame, detail)
+                    results.append(result)
+                    if on_result is not None:
+                        on_result(result)
                     self.done += 1
                     if status == "late":
                         self.log("迟到应答算成功，剩余请求移入后续窗")
@@ -420,7 +440,10 @@ class CoexistScheduler:
                     self.log(f"[{request.label}] {detail} → 重试，"
                              f"本窗剩余请求移入后续窗")
                 else:
-                    results.append(Result(request, "failed", detail=detail))
+                    result = Result(request, "failed", detail=detail)
+                    results.append(result)
+                    if on_result is not None:
+                        on_result(result)
                 break
         finally:
             obs.end_watch()
@@ -557,6 +580,19 @@ def selftest():
     assert CoexistScheduler._rollback_plan(3, 1, window, 0.7) == 2
     assert CoexistScheduler._rollback_plan(3, 1, window, 1.0) == 1
     assert CoexistScheduler._rollback_plan(2, 0, window, 0.0) == 2
+
+    # 单窗消费：按计划次数发送，on_result 逐条回调，未发完的留队列
+    link = _FakeLink([response])
+    sched = CoexistScheduler(link, target)
+    sched.observer.last_activity = 0.0
+    now = time.monotonic()
+    window = Window(open=now, dead=now + 0.9, span=0.9, n=1, w=0.9, budget=0.3)
+    sched._wait_window = lambda queue=None: window
+    queue = RequestQueue([Request(read, "a"), Request(read, "b")])
+    seen = []
+    results = sched.consume_window(queue, on_result=seen.append)
+    assert len(link.sent) == 1 and len(queue.items) == 1
+    assert seen == results and seen[0].status == "ok"
 
     # 天窗锚点：同一主站周期内不重复开窗；观测到新的主站帧才开新窗
     link = _FakeLink([])

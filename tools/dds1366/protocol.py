@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """DL/T 645-2007 帧编解码与 DDS1366 实测数据项。
 
-只依赖标准库。功率类缩放为标准的 XX.XXXX（0.0001 kW/kvar/kVA），
-已经与表显实时功率核对。
+只依赖标准库。电流按标准的 XXX.XXX（0.001 A），功率类按
+XX.XXXX（0.0001 kW/kvar/kVA）。
 """
 from __future__ import annotations
 
@@ -209,8 +209,7 @@ DI_TABLE = (
     DiInfo(0x00000400, "组合有功费率4电能", 4, "kWh"),
     DiInfo(0x0000FF00, "电能数据块(总+费率1~4)", 20, "kWh"),
     DiInfo(0x02010100, "A相电压", 2, "V"),
-    DiInfo(0x02020100, "需量/平均有功功率(实测推断)", 3, "kW",
-           note="标准此 DI 为 A 相电流，本表不是电流"),
+    DiInfo(0x02020100, "A相电流", 3, "A"),
     DiInfo(0x02030000, "瞬时总有功功率", 3, "kW"),
     DiInfo(0x02030100, "瞬时A相有功功率", 3, "kW"),
     DiInfo(0x02040000, "瞬时总无功功率", 3, "kvar"),
@@ -351,9 +350,9 @@ def decode_value(di: int, payload: bytes) -> str:
         return f"{value} V" if value is not None else f"数据={payload.hex(' ').upper()}"
 
     if di == 0x02020100 and n == 3:
-        value = fmt_scaled(bcd_int_le(payload), 4)
-        return (f"{value} kW (功率量，非电流)" if value is not None
-                else f"数据={payload.hex(' ').upper()}")
+        value = fmt_scaled(bcd_int_le(payload), 3)
+        return f"{value} A" if value is not None \
+            else f"数据={payload.hex(' ').upper()}"
 
     if di in (0x02030000, 0x02030100) and n == 3:
         value = fmt_scaled(bcd_int_le(payload), 4)
@@ -491,10 +490,8 @@ def selftest():
     assert validate_address("999999999999") is None
     assert display_addr(b"\x23\x01\x00\x00\x00\x00") == "000000000123"
     assert fmt_scaled(533, 2) == "5.33"
-    # 功率类按标准 XX.XXXX（0.0001 kW）解读；93 28 00（C6 5B 33 减 33H）
-    # 即 0.2893 kW，已与表显实时功率核对。
-    assert decode_value(0x02020100, bytes.fromhex("932800")) == \
-        "0.2893 kW (功率量，非电流)"
+    # 电流按标准 XXX.XXX（0.001 A）；93 28 00（C6 5B 33 减 33H）即 2.893 A。
+    assert decode_value(0x02020100, bytes.fromhex("932800")) == "2.893 A"
     assert decode_value(0x02030000, bytes.fromhex("001200")) == "0.1200 kW"
     assert decode_value(0x02030100, bytes.fromhex("932800")) == "0.2893 kW"
     assert decode_value(0x02040000, bytes.fromhex("932800")) == "0.2893 kvar"

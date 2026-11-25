@@ -2,10 +2,9 @@
 """实时监测：按固定顺序轮询实时参数，每取得一项立即刷新面板显示。
 
 面板在终端备用屏幕内从顶部整块重绘，退出时还原原界面。
-单主站模式按固定间隔（默认 3s）逐项轮询；共存模式不引入额外节奏，
-只在观测到一个新的主站请求帧后才发起一次查询（即每窗 1 次，
-轮询节奏与主站保持一致）。按 Q 或 Esc（或 Ctrl+C）退出，确认统计
-摘要后还原原界面返回菜单。
+单主站模式按固定间隔（默认 1s，可按 0.1s 调整）逐项轮询；共存模式不引入
+额外节奏，每个天窗按允许的最大次数查询，未发完的留到下一窗。按 Q 或 Esc
+（或 Ctrl+C）退出，确认统计摘要后还原原界面返回菜单。
 """
 from __future__ import annotations
 
@@ -16,11 +15,12 @@ import time
 
 from . import protocol as p
 from . import ui
-from .scheduler import Request, Result
+from .scheduler import Request, RequestQueue, Result
 
 # 实时监测依次轮询的数据项；DI 必须已收录在 protocol.DI_TABLE。
 MONITOR_ITEMS = (
     ("A相电压", 0x02010100),
+    ("A相电流", 0x02020100),
     ("瞬时总有功功率", 0x02030000),
     ("总电能", 0x00000000),
     ("继电器状态", 0xF9010100),
@@ -28,7 +28,8 @@ MONITOR_ITEMS = (
     ("总无功功率", 0x02040000),
 )
 
-DEFAULT_INTERVAL = 3   # 单主站模式默认轮询间隔秒
+DEFAULT_INTERVAL = 1.0   # 单主站模式默认每项轮询间隔秒
+MIN_INTERVAL, MAX_INTERVAL = 0.1, 10.0
 
 _POLL_STATUS = {"ok": "成功", "late": "迟到成功", "err": "表拒绝",
                 "timeout": "超时", "failed": "失败", "aborted": "中断",
@@ -241,12 +242,13 @@ def run_monitor(session, *, coexist: bool) -> None:
 
     if coexist:
         interval = None
-        rhythm = "每窗1次"
+        rhythm = f"每窗最多{scheduler.cfg.per_window}次"
     else:
-        interval = ui.ask_int("每项轮询间隔秒", DEFAULT_INTERVAL, lo=1, hi=60)
+        interval = ui.ask_float("每项轮询间隔秒", DEFAULT_INTERVAL,
+                                lo=MIN_INTERVAL, hi=MAX_INTERVAL)
         if ui._INPUT_CLOSED:
             return
-        rhythm = f"每项间隔 {interval}s"
+        rhythm = f"每项间隔 {interval:g}s"
     title = (f"实时监测（{'共存主站' if coexist else '单主站'}） "
              f"目标 {client.address} {rhythm} 按 Q/Esc 退出")
 
@@ -255,12 +257,11 @@ def run_monitor(session, *, coexist: bool) -> None:
     keys = ExitKeys()
     original_log = scheduler.log
     scheduler.log = view.set_status          # 调度消息显示在状态行
-    if not coexist:
-        scheduler.stop_check = keys.poll     # 退出键可中断应答等待
+    scheduler.stop_check = keys.poll         # 退出键可中断等窗/应答
     try:
         view.set_status("按顺序轮询中")
         if coexist:
-            _loop_coexist(client, observer, view, keys)
+            _loop_coexist(client, view, keys)
         else:
             _loop_direct(client, view, keys, interval)
     except KeyboardInterrupt:
@@ -283,17 +284,17 @@ def run_monitor(session, *, coexist: bool) -> None:
 
 
 def _sleep_checkable(keys: ExitKeys, seconds: float, view: MonitorView,
-                     interval: int):
+                     interval: float):
     end = time.monotonic() + max(0.0, seconds)
     while not keys.poll():
         remain = end - time.monotonic()
         if remain <= 0:
             return
-        view.set_status(f"间隔 {interval}s，{remain:.0f}s 后读下一项")
+        view.set_status(f"间隔 {interval:g}s，{remain:.1f}s 后读下一项")
         time.sleep(min(0.1, remain))
 
 
-def _loop_direct(client, view: MonitorView, keys: ExitKeys, interval: int):
+def _loop_direct(client, view: MonitorView, keys: ExitKeys, interval: float):
     """单主站模式：从每项读取开始计时，按固定间隔依次轮询。"""
     position = 0
     while not keys.poll():
@@ -310,39 +311,30 @@ def _loop_direct(client, view: MonitorView, keys: ExitKeys, interval: int):
             _sleep_checkable(keys, remain, view, interval)
 
 
-def _wait_master_frame(observer, view: MonitorView,
-                       keys: ExitKeys, anchor) -> bool:
-    """等到观测到比 anchor 新的主站请求帧才返回 True；退出键返回 False。
-
-    每个主站请求帧对应一个可注入的空窗；等到新帧才发下一查询，
-    即保证每窗 1 次查询、轮询节奏与主站保持一致。
-    """
-    while not keys.poll():
-        last = observer.last_master
-        if last is not None and last != anchor:
-            return True
-        view.set_status("等待主站下一轮询帧 ...")
-        observer.pump(0.05)
-    return False
-
-
-def _loop_coexist(client, observer, view: MonitorView, keys: ExitKeys):
-    """共存模式：观测到一个新主站帧后，在其后的空窗内注入一次查询。"""
+def _loop_coexist(client, view: MonitorView, keys: ExitKeys):
+    """共存模式：每个天窗按允许的最大次数查询，未发完的留到下一窗。"""
+    scheduler = client.scheduler
+    width = scheduler.cfg.per_window
+    pending = RequestQueue()
     position = 0
-    anchor = None
-    while not keys.poll():
-        if not _wait_master_frame(observer, view, keys, anchor):
-            continue    # 按了退出键，交给循环条件结束
-        name, di = MONITOR_ITEMS[position % len(MONITOR_ITEMS)]
-        position += 1
-        view.set_status(f"等待空窗读取 {name} ...")
-        result = client.read(di)
+
+    def report(result):
+        name = result.request.meta["name"]
+        di = result.request.meta["di"]
+        result = client.decode_read(result, di)
         if result.status == "aborted" and keys.exit:
-            break    # 退出键触发调度器中断，不计入统计
-        # 查询完成后以最新主站帧为锚点：下次必须等到更新的主站帧，
-        # 才能保证一个主站周期（一窗）最多一次查询。
-        anchor = observer.last_master
+            return    # 退出键触发调度器中断，不计入统计
         view.update_result(name, di, result)
+
+    while not keys.poll():
+        while len(pending.items) < width:
+            name, di = MONITOR_ITEMS[position % len(MONITOR_ITEMS)]
+            position += 1
+            pending.put(Request(p.build_read(client.aw, di), f"读 {di:08X}",
+                                (0x91, 0xD1), retries=client.retries,
+                                meta={"di": di, "name": name}))
+        view.set_status(f"等待主站空窗（本窗最多 {width} 次）...")
+        scheduler.consume_window(pending, on_result=report)
 
 
 # ------------------------------------------------------------------ 自检
@@ -369,6 +361,52 @@ def selftest():
     view.update_result("A相电压", 0x02010100, result)
     assert view.rows[0x02010100]["status"] == "成功"
     assert view.count == 1 and view.ok == 1 and view.fail == 0
+
+    # 共存轮询：每窗按 width 填满队列，结果逐条写回面板
+    class _Cfg:
+        per_window = 2
+
+    class _Sched:
+        def __init__(self):
+            self.cfg = _Cfg()
+            self.calls = []
+
+        def consume_window(self, queue, on_result=None):
+            self.calls.append(len(queue.items))
+            for _ in range(2):
+                if not queue.items:
+                    break
+                request = queue.items.popleft()
+                on_result(Result(request, "ok", detail="正常应答"))
+
+    class _Client:
+        address = "123456789012"
+        aw = p.wire_addr_of(address)
+        retries = 2
+
+        def __init__(self):
+            self.scheduler = _Sched()
+
+        def decode_read(self, result, di):
+            result.value = f"{di:08X}"
+            return result
+
+    class _Keys:
+        exit = False
+
+        def __init__(self):
+            self.n = 0
+
+        def poll(self):
+            self.n += 1
+            return self.n > 2
+
+    client = _Client()
+    coexist_view = MonitorView("共存自检")
+    coexist_view.live = False
+    _loop_coexist(client, coexist_view, _Keys())
+    assert client.scheduler.calls == [2, 2]
+    assert coexist_view.count == 4 and coexist_view.ok == 4
     print("monitor selftest OK")
 
 

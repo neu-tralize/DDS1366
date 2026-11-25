@@ -95,6 +95,7 @@ def param_menu(state: m.MeterState):
 def measurement_menu(state: m.MeterState):
     while True:
         print(f"\n电压 {state.voltage_dv / 10:.1f} V  "
+              f"电流 {state.current_ma / 1000:.3f} A  "
               f"有功 {state.power_mw / 1000:.4f} kW  "
               f"无功 {state.reactive_mvar / 1000:.4f} kvar  "
               f"视在 {state.apparent_mva / 1000:.4f} kVA  "

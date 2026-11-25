@@ -78,7 +78,8 @@ def ask_int(prompt: str, default: int, lo: int | None = None,
         return value
 
 
-def ask_float(prompt: str, default: float, lo: float | None = None):
+def ask_float(prompt: str, default: float, lo: float | None = None,
+              hi: float | None = None):
     while True:
         text = ask(prompt, f"{default:g}")
         if _INPUT_CLOSED:
@@ -90,6 +91,9 @@ def ask_float(prompt: str, default: float, lo: float | None = None):
             continue
         if lo is not None and value < lo:
             print(f"  不能小于 {lo}。")
+            continue
+        if hi is not None and value > hi:
+            print(f"  不能大于 {hi}。")
             continue
         return value
 

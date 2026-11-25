@@ -47,7 +47,7 @@ class Client:
         return self.scheduler.consume(RequestQueue([request]))[0]
 
     # ---------------------------------------------------------- 读
-    def _decode_read(self, result: Result, di: int) -> Result:
+    def decode_read(self, result: Result, di: int) -> Result:
         if result.status not in OK_STATUS or result.frame is None:
             return result
         raw = p.sub33(result.frame.data)
@@ -66,7 +66,7 @@ class Client:
                           (0x91, 0xD1),
                           retries=self.retries if retries is None else retries,
                           meta={"di": di})
-        return self._decode_read(self._one(request), di)
+        return self.decode_read(self._one(request), di)
 
     def read_many(self, dis, retries: int | None = None):
         queue = RequestQueue()
@@ -76,7 +76,7 @@ class Client:
                               retries=self.retries if retries is None else retries,
                               meta={"di": di}))
         results = self.scheduler.consume(queue)
-        return [self._decode_read(result, result.request.meta["di"])
+        return [self.decode_read(result, result.request.meta["di"])
                 for result in results]
 
     def read_address(self, retries: int | None = None) -> Result:
@@ -243,7 +243,7 @@ def selftest():
     late_frame = p.find_frames(late_raw)[0][0]
     late = Result(Request(p.build_read(aw, 0x00000000), "late"), "late",
                  late_frame)
-    client._decode_read(late, 0x00000000)
+    client.decode_read(late, 0x00000000)
     assert late.status == "late" and late.value == "1234.56 kWh", late
 
     other_aw = p.wire_addr_of("000000000123")
