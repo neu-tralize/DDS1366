@@ -271,14 +271,14 @@ def bcd_bytes_le(value: int, width: int) -> bytes:
 
 
 _GROUP_FLAG_NAMES = {
-    0x00: "分组00(广播N2=00才执行,未实测勿试)",
+    0x00: "分组00(广播N2=00才执行)",
     0xAA: "分组AA(广播N2=AA才执行)",
-    0xBB: "分组BB(广播N2=BB才执行,11-22实测)",
+    0xBB: "分组BB(广播N2=BB才执行)",
 }
 
 
 def group_flag_desc(value: int) -> str:
-    return _GROUP_FLAG_NAMES.get(value, f"分组{value:02X}(未实测)")
+    return _GROUP_FLAG_NAMES.get(value, f"分组{value:02X}")
 
 
 def parse_group_flag(text: str) -> int | None:
