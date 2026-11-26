@@ -2,7 +2,6 @@
 """主站公共交互动作：读取、写参数、继电器、地址、速率、原始帧。"""
 from __future__ import annotations
 
-import re
 import time
 
 from . import protocol as p

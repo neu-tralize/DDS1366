@@ -17,13 +17,23 @@ from . import protocol as p
 from . import ui
 from .scheduler import Request, RequestQueue, Result
 
-# 实时监测依次轮询的数据项；DI 必须已收录在 protocol.DI_TABLE。
+# 面板显示行（顺序即行序）；DI 必须已收录在 protocol.DI_TABLE。
 MONITOR_ITEMS = (
     ("A相电压", 0x02010100),
     ("A相电流", 0x02020100),
     ("瞬时总有功功率", 0x02030000),
     ("总电能", 0x00000000),
     ("继电器状态", 0xF9010100),
+    ("总功率因数", 0x02060000),
+    ("总无功功率", 0x02040000),
+)
+
+# 轮询帧顺序；F9010100 一次应答同时刷新电能与继电器两行。
+MONITOR_POLLS = (
+    ("A相电压", 0x02010100),
+    ("A相电流", 0x02020100),
+    ("瞬时总有功功率", 0x02030000),
+    ("电能/继电器状态", 0xF9010100),
     ("总功率因数", 0x02060000),
     ("总无功功率", 0x02040000),
 )
@@ -70,15 +80,19 @@ def _clip(text: str, width: int) -> str:
     return out + ".."
 
 
-def _short_value(result) -> str | None:
-    """面板中显示的短值；继电器组合读只取状态段，不重复显示电能。"""
-    if result.status not in ("ok", "late"):
-        return None
-    di = result.request.meta.get("di")
-    if di == 0xF9010100 and result.payload is not None \
-            and len(result.payload) >= 6:
-        return p.relay_status_desc(result.payload[4:6])
-    return result.value
+def _read_value(result) -> str | None:
+    return result.value if result.status in ("ok", "late") else None
+
+
+def _combo_parts(result):
+    """F9010100 应答拆成 (电能, 继电器)；不可用时均为 None。"""
+    payload = result.payload
+    if result.status not in ("ok", "late") \
+            or payload is None or len(payload) < 6:
+        return None, None
+    energy = p.fmt_scaled(p.bcd_int_le(payload[:4]), 2)
+    return (f"{energy if energy is not None else '??'} kWh",
+            p.relay_status_desc(payload[4:6]))
 
 
 def _summary(view: MonitorView) -> str:
@@ -184,23 +198,39 @@ class MonitorView:
         self.status = text
         self.render()
 
-    def update_result(self, name: str, di: int, result):
+    def _set_row(self, di: int, value, status: str, stamp: str):
         row = self.rows[di]
-        self.count += 1
-        row["status"] = _POLL_STATUS.get(result.status, result.status)
-        value = _short_value(result)
+        row["status"] = status
         if value:
             row["value"] = value
-            row["ts"] = time.strftime("%H:%M:%S")
+            row["ts"] = stamp
+
+    def update_result(self, name: str, di: int, result):
+        self.count += 1
+        status = _POLL_STATUS.get(result.status, result.status)
+        stamp = time.strftime("%H:%M:%S")
+        if di == 0xF9010100:
+            energy, relay = _combo_parts(result)
+            self._set_row(0x00000000, energy, status, stamp)
+            self._set_row(0xF9010100, relay, status, stamp)
+            ok = bool(energy and relay)
+            shown = f"{energy or '--'} / {relay or '--'}"
+            line = f"{name}: {status} {shown}"
+        else:
+            value = _read_value(result)
+            self._set_row(di, value, status, stamp)
+            ok = bool(value)
+            shown = value or "--"
+            line = f"{name}: {status} {value or self.rows[di]['value']}"
+        if ok:
             self.ok += 1
         else:
             self.fail += 1
-        self.status = _clip(f"{name}: {row['status']} {value or row['value']}",
-                            _PANEL_W - 2)
+        self.status = _clip(line, _PANEL_W - 2)
         if self.live:
             self.render()
         else:
-            print(f"[{name}] {row['status']} {value or '--'} {row['ts']}")
+            print(f"[{name}] {status} {shown} {stamp}")
 
     def render(self):
         lines = self._lines()
@@ -298,7 +328,7 @@ def _loop_direct(client, view: MonitorView, keys: ExitKeys, interval: float):
     """单主站模式：从每项读取开始计时，按固定间隔依次轮询。"""
     position = 0
     while not keys.poll():
-        name, di = MONITOR_ITEMS[position % len(MONITOR_ITEMS)]
+        name, di = MONITOR_POLLS[position % len(MONITOR_POLLS)]
         position += 1
         view.set_status(f"正在读取 {name} ...")
         started = time.monotonic()
@@ -328,7 +358,7 @@ def _loop_coexist(client, view: MonitorView, keys: ExitKeys):
 
     while not keys.poll():
         while len(pending.items) < width:
-            name, di = MONITOR_ITEMS[position % len(MONITOR_ITEMS)]
+            name, di = MONITOR_POLLS[position % len(MONITOR_POLLS)]
             position += 1
             pending.put(Request(p.build_read(client.aw, di), f"读 {di:08X}",
                                 (0x91, 0xD1), retries=client.retries,
@@ -339,8 +369,9 @@ def _loop_coexist(client, view: MonitorView, keys: ExitKeys):
 
 # ------------------------------------------------------------------ 自检
 def selftest():
-    for name, di in MONITOR_ITEMS:
+    for name, di in MONITOR_ITEMS + MONITOR_POLLS:
         assert di in p.DI_BY_CODE, f"监测项 {name} 的 DI 未收录"
+    assert 0x00000000 not in [di for _, di in MONITOR_POLLS]
 
     assert _disp_width("A相电压") == 7
     assert _pad("AB", 5) == "AB   "
@@ -353,13 +384,15 @@ def selftest():
     payload = bytes.fromhex("56341200") + b"\x08\x02"
     result = Result(request, "ok", payload=payload)
     result.value = p.decode_value(0xF9010100, payload)
-    assert _short_value(result) == "远程拉闸(单播 1A 所致) (08 02)"
+    assert _combo_parts(result) == \
+        ("1234.56 kWh", "远程拉闸(单播 1A 所致) (08 02)")
 
     view = MonitorView("测试面板（自检）")
     assert len(view._lines()) == 7 + len(MONITOR_ITEMS)
     view.live = False
-    view.update_result("A相电压", 0x02010100, result)
-    assert view.rows[0x02010100]["status"] == "成功"
+    view.update_result("电能/继电器状态", 0xF9010100, result)
+    assert view.rows[0x00000000]["value"] == "1234.56 kWh"
+    assert view.rows[0xF9010100]["value"] == "远程拉闸(单播 1A 所致) (08 02)"
     assert view.count == 1 and view.ok == 1 and view.fail == 0
 
     # 共存轮询：每窗按 width 填满队列，结果逐条写回面板
@@ -389,6 +422,8 @@ def selftest():
 
         def decode_read(self, result, di):
             result.value = f"{di:08X}"
+            if di == 0xF9010100:
+                result.payload = bytes.fromhex("000000000000")
             return result
 
     class _Keys:

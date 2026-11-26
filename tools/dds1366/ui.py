@@ -203,9 +203,8 @@ def env_addresses(cfg: dict) -> list[str]:
 def set_env_addresses(cfg: dict, addresses) -> None:
     values = []
     for item in addresses:
-        value = p.validate_address(item)
-        if value and value not in values:
-            values.append(value)
+        if item and item not in values:
+            values.append(item)
     if values:
         cfg[ADDRESSES_KEY] = ",".join(values)
     else:
@@ -223,10 +222,9 @@ def resolve_address_text(text: str, addresses):
     if len(raw) > 12:
         return None, False, "地址不能超过 12 位。"
     if len(raw) == 12:
-        value = p.validate_address(raw)
-        if value is None:
+        if raw == p.BCAST_DISPLAY:
             return None, False, "不能使用广播地址 999999999999。"
-        return value, value not in addresses, ""
+        return raw, raw not in addresses, ""
     matches = [item for item in addresses if item.endswith(raw)]
     if not matches:
         return None, False, f"没有已储存地址以 {raw} 结尾。"
