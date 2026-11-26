@@ -238,6 +238,61 @@ def address_menu(session):
             ui.pause()
 
 
+def target_address_setup(session):
+    """设置目标地址：12 位完整地址新增入集合，不足 12 位按后缀匹配。"""
+    addresses = ui.env_addresses(session.cfg)
+    current = p.validate_address(session.cfg.get("METER_ADDRESS", "")) or ""
+    print("已储存地址: " + (" ".join(addresses) if addresses else "(无)"))
+    text = ui.ask(
+        "目标表地址（12 位=完整地址；不足 12 位按后缀匹配；回车=不修改）",
+        current)
+    if not text:
+        print("未输入，保持当前目标。")
+        return
+    value, is_new, reason = ui.resolve_address_text(text, addresses)
+    if value is None:
+        print(reason)
+        return
+    if value == current:
+        print(f"目标地址仍为 {value}。")
+        return
+    if is_new:
+        addresses.append(value)
+        ui.set_env_addresses(session.cfg, addresses)
+        print(f"新地址 {value} 已加入集合。")
+    session.cfg["METER_ADDRESS"] = value
+    if session.client is not None:
+        session.client.set_address(value)
+    ui.save_env(session.cfg)
+    print(f"目标地址已设为 {value}。")
+
+
+def forget_stored_address(session):
+    """删除已储存地址：需完整输入 12 位，删除前 y/N 确认。"""
+    addresses = ui.env_addresses(session.cfg)
+    if not addresses:
+        print("尚无已储存地址。")
+        return
+    print("已储存地址: " + " ".join(addresses))
+    current = p.validate_address(session.cfg.get("METER_ADDRESS", "")) or ""
+    text = ui.ask("要删除的完整地址（12 位）")
+    raw = "".join(text.split())
+    value = p.validate_address(raw) if len(raw) == 12 else None
+    if value is None or value not in addresses:
+        print("未找到该已储存地址（需完整输入 12 位）。")
+        return
+    if value == current:
+        print("这是当前目标地址，请先切换到其他地址再删除。")
+        return
+    if not ui.confirm(f"删除已储存地址 {value}?", default=False):
+        print("已取消。")
+        return
+    addresses.remove(value)
+    ui.set_env_addresses(session.cfg, addresses)
+    ui.save_env(session.cfg)
+    print(f"已删除 {value}。")
+
+
 def baud_menu(session):
     current = ui.env_int(session.cfg, "BAUD", 2400)
     print(f"当前本机速率: {current}bps")

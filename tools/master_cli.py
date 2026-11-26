@@ -7,8 +7,9 @@ import sys
 
 from dds1366 import protocol as p
 from dds1366 import ui
-from dds1366.actions import (address_menu, baud_menu, raw_menu, read_menu,
-                             relay_menu, write_menu)
+from dds1366.actions import (address_menu, baud_menu, forget_stored_address,
+                             raw_menu, read_menu, relay_menu,
+                             target_address_setup, write_menu)
 from dds1366.client import Client
 from dds1366.link import Link, SerialConfig
 from dds1366.monitor import run_monitor
@@ -72,6 +73,7 @@ class Session:
 
     def show_config(self):
         print(f"  目标地址: {self.cfg.get('METER_ADDRESS', '(未设置)')}")
+        print(f"  已存地址: {' '.join(ui.env_addresses(self.cfg)) or '(无)'}")
         print(f"  串口: {self.cfg.get('PORT') or '(自动)'}  "
               f"{ui.env_int(self.cfg, 'BAUD', 2400)} 8"
               f"{self.cfg.get('PARITY', 'E')}1  "
@@ -103,23 +105,21 @@ def settings_menu(session: Session):
         ui.banner("设置与重连")
         session.show_config()
         choice = ui.menu("修改配置", [
-            ("1", "目标表地址"),
-            ("2", "串口与串口参数"),
-            ("3", "重试次数 / 应答超时"),
-            ("4", "显示配置"),
-            ("5", "重连串口"),
+            ("1", "目标表地址（12 位新增/不足 12 位按后缀匹配）"),
+            ("2", "删除已储存地址"),
+            ("3", "串口与串口参数"),
+            ("4", "重试次数 / 应答超时"),
+            ("5", "显示配置"),
+            ("6", "重连串口"),
             ("0", "返回"),
         ])
         if choice == "0":
             return
         if choice == "1":
-            new = ui.address_prompt(session.cfg.get("METER_ADDRESS", ""))
-            session.cfg["METER_ADDRESS"] = new
-            if session.client is not None:
-                session.client.set_address(new)
-            ui.save_env(session.cfg)
-            print("目标地址已更新。")
+            target_address_setup(session)
         elif choice == "2":
+            forget_stored_address(session)
+        elif choice == "3":
             session.cfg["PORT"] = ui.port_prompt(session.cfg.get("PORT", ""))
             session.cfg["BAUD"] = str(ui.baud_prompt(
                 ui.env_int(session.cfg, "BAUD", 2400)))
@@ -129,7 +129,7 @@ def settings_menu(session: Session):
                 session.cfg.get("TX_KEY", "rts"))
             ui.save_env(session.cfg)
             session.reopen()
-        elif choice == "3":
+        elif choice == "4":
             session.cfg["RETRIES"] = str(ui.ask_int("重试次数", 2, lo=0, hi=9))
             timeout = ui.ask_float(
                 "应答超时秒",
@@ -137,10 +137,10 @@ def settings_menu(session: Session):
             session.cfg["RESPONSE_TIMEOUT"] = f"{timeout:g}"
             ui.save_env(session.cfg)
             session.reopen()
-        elif choice == "4":
+        elif choice == "5":
             session.show_config()
             ui.pause()
-        elif choice == "5":
+        elif choice == "6":
             session.reopen()
             ui.pause()
 

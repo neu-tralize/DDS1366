@@ -2,6 +2,7 @@
 """交互层：菜单、输入校验、风险确认与 .env 配置。"""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -9,11 +10,13 @@ from . import protocol as p
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = BASE_DIR / ".env"
+ADDRESSES_KEY = "METER_ADDRESSES"
 _INPUT_CLOSED = False
 
 ENV_ORDER = (
-    "METER_ADDRESS", "PORT", "BAUD", "PARITY", "TX_KEY", "BROADCAST_GROUP",
-    "RETRIES", "RESPONSE_TIMEOUT", "COEXIST_PER_WINDOW", "COEXIST_TXN_WAIT",
+    "METER_ADDRESS", "METER_ADDRESSES", "PORT", "BAUD", "PARITY", "TX_KEY",
+    "BROADCAST_GROUP", "RETRIES", "RESPONSE_TIMEOUT", "COEXIST_PER_WINDOW",
+    "COEXIST_TXN_WAIT",
 )
 
 DEFAULT_GROUP = "AA"
@@ -175,12 +178,62 @@ def load_env(path: Path | str | None = None) -> dict:
 
 def save_env(cfg: dict, path: Path | str | None = None):
     path = Path(path or ENV_PATH)
+    set_env_addresses(cfg, env_addresses(cfg))
     keys = list(ENV_ORDER) + sorted(k for k in cfg if k not in ENV_ORDER)
     lines = ["# DDS1366 工具默认配置；本文件含现场地址，请勿提交。"]
     for key in keys:
         if key in cfg:
             lines.append(f"{key}={cfg[key]}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def env_addresses(cfg: dict) -> list[str]:
+    """已储存的地址集合（去重保序），当前目标始终包含在内。"""
+    items = []
+    for chunk in re.split(r"[,;\s]+", cfg.get(ADDRESSES_KEY, "")):
+        value = p.validate_address(chunk)
+        if value and value not in items:
+            items.append(value)
+    current = p.validate_address(cfg.get("METER_ADDRESS", ""))
+    if current and current not in items:
+        items.append(current)
+    return items
+
+
+def set_env_addresses(cfg: dict, addresses) -> None:
+    values = []
+    for item in addresses:
+        value = p.validate_address(item)
+        if value and value not in values:
+            values.append(value)
+    if values:
+        cfg[ADDRESSES_KEY] = ",".join(values)
+    else:
+        cfg.pop(ADDRESSES_KEY, None)
+
+
+def resolve_address_text(text: str, addresses):
+    """12 位输入视为完整地址，不足 12 位按后缀匹配已存集合。
+
+    返回 (地址, 是否新地址, 失败原因)；地址为 None 时第三项说明原因。
+    """
+    raw = "".join(str(text).split())
+    if not raw or not (raw.isascii() and raw.isdigit()):
+        return None, False, "地址只能包含数字 0-9。"
+    if len(raw) > 12:
+        return None, False, "地址不能超过 12 位。"
+    if len(raw) == 12:
+        value = p.validate_address(raw)
+        if value is None:
+            return None, False, "不能使用广播地址 999999999999。"
+        return value, value not in addresses, ""
+    matches = [item for item in addresses if item.endswith(raw)]
+    if not matches:
+        return None, False, f"没有已储存地址以 {raw} 结尾。"
+    if len(matches) > 1:
+        return None, False, (f"后缀 {raw} 匹配到多个地址："
+                             + "，".join(matches) + "；请多输入几位。")
+    return matches[0], False, ""
 
 
 def address_prompt(current: str = "") -> str:
@@ -267,6 +320,39 @@ def describe_result(result) -> str:
 
 def show_result(result):
     print(describe_result(result))
+
+
+def selftest():
+    import tempfile
+    addrs = ["000000123456", "000000123457"]
+    merged = env_addresses({"METER_ADDRESS": "123456",
+                            ADDRESSES_KEY: "123457,000000123456"})
+    assert sorted(merged) == addrs, merged
+    assert resolve_address_text("123456", addrs) == \
+        ("000000123456", False, "")
+    assert resolve_address_text(" 3456 ", addrs) == \
+        ("000000123456", False, "")
+    pair = ["000000123456", "000000223456"]
+    assert resolve_address_text("3456", pair)[0] is None
+    assert resolve_address_text("123456", pair) == \
+        ("000000123456", False, "")
+    assert resolve_address_text("１２３", addrs)[0] is None
+    assert resolve_address_text("123458", addrs)[0] is None
+    assert resolve_address_text("000000123458", addrs) == \
+        ("000000123458", True, "")
+    assert resolve_address_text("12345", addrs)[0] is None
+    assert resolve_address_text("9999", addrs)[0] is None
+    assert resolve_address_text("999999999999", addrs)[0] is None
+    assert resolve_address_text("1234567890123", addrs)[0] is None
+    assert resolve_address_text("12x", addrs)[0] is None
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / ".env"
+        cfg = {"METER_ADDRESS": "123456", ADDRESSES_KEY: "123457"}
+        save_env(cfg, path)
+        loaded = load_env(path)
+        assert loaded["METER_ADDRESS"] == "123456"
+        assert loaded["METER_ADDRESSES"] == \
+            "000000123457,000000123456", loaded["METER_ADDRESSES"]
 
 
 def _main():

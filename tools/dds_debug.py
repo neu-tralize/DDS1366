@@ -459,8 +459,9 @@ def cmd_raw(args, cfg):
 
 
 def cmd_selftest(args, cfg):
-    from dds1366 import client, link, meter, monitor, protocol, scheduler
-    for module in (protocol, link, scheduler, client, meter, monitor):
+    from dds1366 import (client, link, meter, monitor, protocol, scheduler,
+                         ui)
+    for module in (protocol, link, scheduler, client, meter, monitor, ui):
         module.selftest()
     return 0
 
